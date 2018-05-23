@@ -43,6 +43,7 @@ IF ( X11_FOUND )
   MESSAGE ( STATUS " X11_LIBRARIES: " ${X11_LIBRARIES} )
 ENDIF ( X11_FOUND )
 
+
 # Find rquired packeges
 find_package(Boost REQUIRED COMPONENTS thread)
 find_package(OpenCV REQUIRED)
@@ -218,6 +219,7 @@ target_link_libraries(${PROJECT_NAME}
 add_dependencies(${PROJECT_NAME}_lib
   darknet_ros_msgs_generate_messages_cpp
 )
+add_dependencies(${PROJECT_NAME}_lib ${catkin_EXPORTED_TARGETS})
 
 install(TARGETS ${PROJECT_NAME}_lib
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

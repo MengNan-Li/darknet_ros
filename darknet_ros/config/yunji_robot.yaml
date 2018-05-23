@@ -1,0 +1,21 @@
+yolo_model:
+
+  config_file:
+    name: yunji_robot_yolov3.cfg
+  weight_file:
+    name: yunji_robot_yolov3_final.weights
+  threshold:
+    value: 0.3
+  detection_classes:
+    names:
+      - yunji_robot
+      - water_robot
+      - yunfan
+      - run_robot
+      - chongdianzhaung
+
+
+
+
+
+
