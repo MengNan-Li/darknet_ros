@@ -1,0 +1,39 @@
+<!--
+Copyright (c) 2017 Intel Corporation
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+     http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+<!-- ns=darknet_ros是参数的命名空间，在yolo_object_detector_nodelet.cpp中将nodehandle的命名空间私有～改为darknet_ros -->
+
+<launch>
+  <arg name="manager"                   default="darknet_ros_nodelet_manager" />
+  <arg name="name"                      default="darknet_ros" />
+
+  <!-- Config and weights folder. -->
+  <arg name="yolo_weights_path"          default="$(find darknet_ros)/yolo_network_config/weights"/>
+  <arg name="yolo_config_path"           default="$(find darknet_ros)/yolo_network_config/cfg"/>
+
+  <!-- Load parameters -->
+  <rosparam command="load" ns="darknet_ros" file="$(find darknet_ros)/config/ros.yaml"/>
+  <rosparam command="load" ns="darknet_ros" file="$(find darknet_ros)/config/yunji_robot.yaml"/>
+
+
+  <node pkg="nodelet"
+    type="nodelet"
+    name="$(arg name)"
+    args="load darknet_ros/darknet_ros_nodelet $(arg manager)"
+    output="screen">
+
+    <param name="weights_path"          value="$(arg yolo_weights_path)" />
+    <param name="config_path"           value="$(arg yolo_config_path)" />
+   
+  </node>
+</launch>

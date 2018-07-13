@@ -41,7 +41,6 @@ YoloObjectDetector::YoloObjectDetector(ros::NodeHandle nh)
 
   // Read parameters from config file.
   if (!readParameters()) {
-    ROS_ERROR("readParameters() return error");
     ros::requestShutdown();
   }
 
@@ -64,6 +63,10 @@ bool YoloObjectDetector::readParameters()
   nodeHandle_.param("image_view/wait_key_delay", waitKeyDelay_, 3);
   nodeHandle_.param("image_view/enable_console_output", enableConsoleOutput_, false);
 
+  /**
+   *Xserver/X11，运行在能够显示界面的linux系统中，服务器版本则没有运行Xserver
+   *服务器版本的如果需要在客户端显示界面的话，可以配置dispaly只向运行Xserver的客户机。 
+   */
   // Check if Xserver is running on Linux.
   if (XOpenDisplay(NULL)) {
     // Do nothing!
@@ -77,6 +80,7 @@ bool YoloObjectDetector::readParameters()
   nodeHandle_.param("yolo_model/detection_classes/names", classLabels_,
                     std::vector<std::string>(0));
   numClasses_ = classLabels_.size();
+  //rosBoxes是numClasses×n的一个二维数组
   rosBoxes_ = std::vector<std::vector<RosBox_> >(numClasses_);
   rosBoxCounter_ = std::vector<int>(numClasses_);
 
@@ -113,12 +117,14 @@ void YoloObjectDetector::init()
   cfg = new char[configPath.length() + 1];
   strcpy(cfg, configPath.c_str());
 
+  //这个应该没用，detection，只需要模型cfg，weigets，class name
   // Path to data folder.
   dataPath = darknetFilePath_;
   dataPath += "/data";
   data = new char[dataPath.length() + 1];
   strcpy(data, dataPath.c_str());
 
+  //C语言跟内存申请相关的函数主要有 alloca、calloc、malloc、free、realloc等
   // Get classes.
   detectionNames = (char**) realloc((void*) detectionNames, (numClasses_ + 1) * sizeof(char*));
   for (int i = 0; i < numClasses_; i++) {
@@ -146,7 +152,6 @@ void YoloObjectDetector::init()
 
   nodeHandle_.param("subscribers/camera_reading/topic", cameraTopicName,
                     std::string("/camera/image_raw"));
-  std::cout<<"subscribers/camera_reading/topic: "<< cameraTopicName << std::endl;
   nodeHandle_.param("subscribers/camera_reading/queue_size", cameraQueueSize, 1);
   nodeHandle_.param("publishers/object_detector/topic", objectDetectorTopicName,
                     std::string("found_object"));
@@ -166,11 +171,11 @@ void YoloObjectDetector::init()
   objectPublisher_ = nodeHandle_.advertise<std_msgs::Int8>(objectDetectorTopicName,
                                                            objectDetectorQueueSize,
                                                            objectDetectorLatch);
-  boundingBoxesPublisher_ = nodeHandle_.advertise<object_msgs::ObjectsInBoxes>(
+  boundingBoxesPublisher_ = nodeHandle_.advertise<darknet_ros_msgs::BoundingBoxes>(
       boundingBoxesTopicName, boundingBoxesQueueSize, boundingBoxesLatch);
   detectionImagePublisher_ = nodeHandle_.advertise<sensor_msgs::Image>(detectionImageTopicName,
                                                                        detectionImageQueueSize,
-                                                                       detectionImageLatch);
+                                                                       detectionImageLatch); //Latch弹簧锁，把最后一条消息存储发送到新connect的subscriber
 
   // Action servers.
   std::string checkForObjectsActionName;
@@ -200,7 +205,7 @@ void YoloObjectDetector::cameraCallback(const sensor_msgs::ImageConstPtr& msg)
   }
 
   if (cam_image) {
-    {
+    { //在unique_lock对象的声明周期内，它所管理的锁对象会一直保持上锁状态；而unique_lock的生命周期结束之后，它所管理的锁对象会被解锁
       boost::unique_lock<boost::shared_mutex> lockImageCallback(mutexImageCallback_);
       camImageCopy_ = cam_image->image.clone();
     }
@@ -485,7 +490,6 @@ void YoloObjectDetector::yolo()
   while (!getImageStatus()) {
     printf("Waiting for image.\n");
     if (!isNodeRunning()) {
-      printf("darknet_ros node shutdown\n");
       return;
     }
     std::this_thread::sleep_for(wait_duration);
@@ -601,7 +605,6 @@ void *YoloObjectDetector::publishInThread()
 
     for (int i = 0; i < numClasses_; i++) {
       if (rosBoxCounter_[i] > 0) {
-        object_msgs::ObjectInBox boundingBox1;
         darknet_ros_msgs::BoundingBox boundingBox;
 
         for (int j = 0; j < rosBoxCounter_[i]; j++) {
@@ -609,16 +612,6 @@ void *YoloObjectDetector::publishInThread()
           int ymin = (rosBoxes_[i][j].y - rosBoxes_[i][j].h / 2) * frameHeight_;
           int xmax = (rosBoxes_[i][j].x + rosBoxes_[i][j].w / 2) * frameWidth_;
           int ymax = (rosBoxes_[i][j].y + rosBoxes_[i][j].h / 2) * frameHeight_;
-
-          boundingBox1.object.object_name = classLabels_[i];
-          boundingBox1.object.probability = rosBoxes_[i][j].prob;
-          boundingBox1.roi.x_offset = xmin;
-          boundingBox1.roi.y_offset = ymin;
-          boundingBox1.roi.height = ymax-ymin;
-          boundingBox1.roi.width = xmax-xmin;
-          boundingBoxesResults_1.objects_vector.push_back(boundingBox1);
-          boundingBoxesResults_1.header = imageHeader_;
-
 
           boundingBox.Class = classLabels_[i];
           boundingBox.probability = rosBoxes_[i][j].prob;
@@ -630,8 +623,10 @@ void *YoloObjectDetector::publishInThread()
         }
       }
     }
-    boundingBoxesResults_.header = imageHeader_;
-    boundingBoxesPublisher_.publish(boundingBoxesResults_1);
+    boundingBoxesResults_.header.stamp = ros::Time::now();
+    boundingBoxesResults_.header.frame_id = "detection";
+    boundingBoxesResults_.image_header = imageHeader_;
+    boundingBoxesPublisher_.publish(boundingBoxesResults_);
   } else {
     std_msgs::Int8 msg;
     msg.data = 0;
@@ -645,8 +640,6 @@ void *YoloObjectDetector::publishInThread()
     checkForObjectsActionServer_->setSucceeded(objectsActionResult, "Send bounding boxes.");
   }
   boundingBoxesResults_.bounding_boxes.clear();
-  boundingBoxesResults_1.objects_vector.clear();
-
   for (int i = 0; i < numClasses_; i++) {
     rosBoxes_[i].clear();
     rosBoxCounter_[i] = 0;

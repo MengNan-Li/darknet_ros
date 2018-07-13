@@ -57,6 +57,8 @@ find_package(catkin REQUIRED
     actionlib
     darknet_ros_msgs
     image_transport
+    nodelet
+    pluginlib
 )
 
 # Enable OPENCV in darknet
@@ -155,6 +157,11 @@ if (CUDA_FOUND)
   cuda_add_executable(${PROJECT_NAME}
     src/yolo_object_detector_node.cpp
   )
+cuda_add_library(darknet_ros_nodelet
+  src/yolo_object_detector_nodelet.cpp
+)
+
+
 
 else()
 
@@ -210,16 +217,25 @@ else()
     src/yolo_object_detector_node.cpp
   )
 
+add_library(darknet_ros_nodelet
+  src/yolo_object_detector_nodelet.cpp
+)
+
 endif()
 
 target_link_libraries(${PROJECT_NAME}
   ${PROJECT_NAME}_lib
 )
+target_link_libraries(darknet_ros_nodelet
+  ${PROJECT_NAME}_lib
+)
+
 
 add_dependencies(${PROJECT_NAME}_lib
   darknet_ros_msgs_generate_messages_cpp
 )
 add_dependencies(${PROJECT_NAME}_lib ${catkin_EXPORTED_TARGETS})
+add_dependencies(darknet_ros_nodelet ${catkin_EXPORTED_TARGETS})
 
 install(TARGETS ${PROJECT_NAME}_lib
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

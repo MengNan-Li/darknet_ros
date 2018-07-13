@@ -1,8 +1,8 @@
 subscribers:
 
   camera_reading:
-    # topic: /water_astra_rgbd/rgb/image_raw
-    topic: /camera/color/image_raw
+    #topic: /water_astra_rgbd/rgb/image_raw
+    topic: /object_analytics/rgb
     queue_size: 1
 
 actions:
@@ -18,7 +18,8 @@ publishers:
     latch: false
 
   bounding_boxes:
-    topic: /darknet_ros/bounding_boxes
+    #topic: /darknet_ros/bounding_boxes
+    topic: /object_analytics/detection
     queue_size: 1
     latch: false
 
@@ -29,6 +30,6 @@ publishers:
 
 image_view:
 
-  enable_opencv: true
+  enable_opencv: false
   wait_key_delay: 1
   enable_console_output: true
