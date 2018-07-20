@@ -26,6 +26,10 @@
 #include <sensor_msgs/Image.h>
 #include <geometry_msgs/Point.h>
 #include <image_transport/image_transport.h>
+#include <message_filters/time_synchronizer.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
 
 // OpenCv
 #include <opencv2/imgproc/imgproc.hpp>
@@ -38,6 +42,11 @@
 #include <darknet_ros_msgs/BoundingBox.h>
 #include <darknet_ros_msgs/CheckForObjectsAction.h>
 #include <object_msgs/ObjectsInBoxes.h>
+#include <darknet_ros_msgs/ObjectPose.h>
+#include <darknet_ros_msgs/ObjectPoses.h>
+
+// depth_to_scan
+#include <DepthImageToLaserScan.h>
 
 
 // Darknet.
@@ -86,6 +95,13 @@ class YoloObjectDetector
   ~YoloObjectDetector();
 
  private:
+  
+  message_filters::TimeSynchronizer<object_msgs::ObjectsInBoxes, sensor_msgs::Image, sensor_msgs::CameraInfo> *sync;
+  message_filters::Subscriber<object_msgs::ObjectsInBoxes> *object_boxes_sub;
+  message_filters::Subscriber<sensor_msgs::Image> *depth_sub;
+  message_filters::Subscriber<sensor_msgs::CameraInfo> *cameraInfo_sub;
+
+  depthimage_to_laserscan::DepthImageToLaserScan dtl_;
   /*!
    * Reads and verifies the ROS parameters.
    * @return true if successful.
@@ -97,11 +113,17 @@ class YoloObjectDetector
    */
   void init();
 
+
+  void compute_pose_callback(const object_msgs::ObjectsInBoxesConstPtr &objectInBoxes, 
+                             const sensor_msgs::ImageConstPtr &depth,
+                             const sensor_msgs::CameraInfoConstPtr &cameraInfo);
+
   /*!
    * Callback of camera.
    * @param[in] msg image pointer.
    */
   void cameraCallback(const sensor_msgs::ImageConstPtr& msg);
+
 
   /*!
    * Check for objects action goal callback.

@@ -59,6 +59,8 @@ find_package(catkin REQUIRED
     image_transport
     nodelet
     pluginlib
+    message_filters
+    image_geometry
 )
 
 # Enable OPENCV in darknet
@@ -88,6 +90,7 @@ include_directories(
   include
   ${Boost_INCLUDE_DIRS}
   ${catkin_INCLUDE_DIRS}
+  depth_to_scan
 )
 
 if (CUDA_FOUND)
@@ -99,6 +102,7 @@ if (CUDA_FOUND)
   cuda_add_library(${PROJECT_NAME}_lib
     src/YoloObjectDetector.cpp
     src/image_interface.c
+    depth_to_scan/DepthImageToLaserScan.cpp
 
     ${DARKNET_PATH}/src/activation_layer.c        ${DARKNET_PATH}/src/im2col.c
     ${DARKNET_PATH}/src/activations.c             ${DARKNET_PATH}/src/image.c
@@ -168,6 +172,7 @@ else()
   add_library(${PROJECT_NAME}_lib
     src/YoloObjectDetector.cpp
     src/image_interface.c
+    depth_to_scan/DepthImageToLaserScan.cpp
 
     ${DARKNET_PATH}/src/activation_layer.c        ${DARKNET_PATH}/src/im2col.c
     ${DARKNET_PATH}/src/activations.c             ${DARKNET_PATH}/src/image.c

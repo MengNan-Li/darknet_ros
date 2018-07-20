@@ -63,7 +63,10 @@ bool YoloObjectDetector::readParameters()
   nodeHandle_.param("image_view/enable_opencv", viewImage_, true);
   nodeHandle_.param("image_view/wait_key_delay", waitKeyDelay_, 3);
   nodeHandle_.param("image_view/enable_console_output", enableConsoleOutput_, false);
-
+  /**
+   *Xserver/X11，运行在能够显示界面的linux系统中，服务器版本则没有运行Xserver
+   *服务器版本的如果需要在客户端显示界面的话，可以配置dispaly只向运行Xserver的客户机。 
+   */
   // Check if Xserver is running on Linux.
   if (XOpenDisplay(NULL)) {
     // Do nothing!
@@ -77,6 +80,7 @@ bool YoloObjectDetector::readParameters()
   nodeHandle_.param("yolo_model/detection_classes/names", classLabels_,
                     std::vector<std::string>(0));
   numClasses_ = classLabels_.size();
+  //rosBoxes是numClasses×n的一个二维数组
   rosBoxes_ = std::vector<std::vector<RosBox_> >(numClasses_);
   rosBoxCounter_ = std::vector<int>(numClasses_);
 
@@ -106,6 +110,7 @@ void YoloObjectDetector::init()
   weights = new char[weightsPath.length() + 1];
   strcpy(weights, weightsPath.c_str());
 
+  //这个应该没用，detection，只需要模型cfg，weigets，class name
   // Path to config file.
   nodeHandle_.param("yolo_model/config_file/name", configModel, std::string("yolov2-tiny.cfg"));
   nodeHandle_.param("config_path", configPath, std::string("/default"));
@@ -119,6 +124,7 @@ void YoloObjectDetector::init()
   data = new char[dataPath.length() + 1];
   strcpy(data, dataPath.c_str());
 
+  //C语言跟内存申请相关的函数主要有 alloca、calloc、malloc、free、realloc等
   // Get classes.
   detectionNames = (char**) realloc((void*) detectionNames, (numClasses_ + 1) * sizeof(char*));
   for (int i = 0; i < numClasses_; i++) {
@@ -134,6 +140,10 @@ void YoloObjectDetector::init()
   // Initialize publisher and subscriber.
   std::string cameraTopicName;
   int cameraQueueSize;
+  std::string depthTopicName;
+  int depthQueueSize;
+  std::string cameraInfoTopicName;
+  int cameraInfoQueueSize;
   std::string objectDetectorTopicName;
   int objectDetectorQueueSize;
   bool objectDetectorLatch;
@@ -143,11 +153,25 @@ void YoloObjectDetector::init()
   std::string detectionImageTopicName;
   int detectionImageQueueSize;
   bool detectionImageLatch;
+  std::string objectPoseTopicName;
+  int objectPoseQueueSize;
+  bool objectPoseLatch;
 
   nodeHandle_.param("subscribers/camera_reading/topic", cameraTopicName,
                     std::string("/camera/image_raw"));
   std::cout<<"subscribers/camera_reading/topic: "<< cameraTopicName << std::endl;
   nodeHandle_.param("subscribers/camera_reading/queue_size", cameraQueueSize, 1);
+
+  nodeHandle_.param("subscribers/depth_reading/topic", depthTopicName,
+                    std::string("/camera/image_raw"));
+  std::cout<<"subscribers/depth_reading/topic: "<< depthTopicName << std::endl;
+  nodeHandle_.param("subscribers/depth_reading/queue_size", depthQueueSize, 1);
+
+  nodeHandle_.param("subscribers/camera_info/topic", cameraInfoTopicName,
+                    std::string("/camera/image_raw"));
+  std::cout<<"subscribers/camera_info/topic: "<< cameraInfoTopicName << std::endl;
+  nodeHandle_.param("subscribers/camera_info/queue_size", cameraInfoQueueSize, 1);
+
   nodeHandle_.param("publishers/object_detector/topic", objectDetectorTopicName,
                     std::string("found_object"));
   nodeHandle_.param("publishers/object_detector/queue_size", objectDetectorQueueSize, 1);
@@ -160,14 +184,38 @@ void YoloObjectDetector::init()
                     std::string("detection_image"));
   nodeHandle_.param("publishers/detection_image/queue_size", detectionImageQueueSize, 1);
   nodeHandle_.param("publishers/detection_image/latch", detectionImageLatch, true);
+  nodeHandle_.param("publishers/object_pose/topic", objectPoseTopicName,
+                    std::string("detection_image"));
+  nodeHandle_.param("publishers/object_pose/queue_size", objectPoseQueueSize, 1);
+  nodeHandle_.param("publishers/object_pose/latch", objectPoseLatch, true);
 
+
+  //订阅图像
   imageSubscriber_ = imageTransport_.subscribe(cameraTopicName, cameraQueueSize,
                                                &YoloObjectDetector::cameraCallback, this);
+  
+  //时间同步订阅边框和深度 --> 计算pose
+  object_boxes_sub = new  message_filters::Subscriber<object_msgs::ObjectsInBoxes>(nodeHandle_, boundingBoxesTopicName, boundingBoxesQueueSize);
+  depth_sub = new message_filters::Subscriber<sensor_msgs::Image>(nodeHandle_, cameraTopicName, cameraQueueSize); 
+  cameraInfo_sub = new message_filters::Subscriber<sensor_msgs::CameraInfo>(nodeHandle_, cameraInfoTopicName, cameraInfoQueueSize);
+  /*订阅对象和sync必须是具备全局生命周期的，所以下面的局部变量就不合适了*/
+  // typedef message_filters::sync_policies::ApproximateTime<object_msgs::ObjectsInBoxes,
+  //       sensor_msgs::Image> MySyncPolicy;
+  // message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(200), object_boxes_sub, depth_sub);// 同步
+  // sync.registerCallback(boost::bind(&YoloObjectDetector::compute_pose_callback, this, _1, _2));   
+
+  sync = new message_filters::TimeSynchronizer<object_msgs::ObjectsInBoxes, sensor_msgs::Image, sensor_msgs::CameraInfo>
+                                             (*object_boxes_sub, *depth_sub, *cameraInfo_sub, 10);
+  sync->registerCallback(boost::bind(&YoloObjectDetector::compute_pose_callback, this, _1, _2, _3));
+
+  //发布object的标号，和训练中的label标号顺序一样
   objectPublisher_ = nodeHandle_.advertise<std_msgs::Int8>(objectDetectorTopicName,
                                                            objectDetectorQueueSize,
-                                                           objectDetectorLatch);
+                                                           objectDetectorLatch); 
+  //发布被检测到的目标边框                                                       
   boundingBoxesPublisher_ = nodeHandle_.advertise<object_msgs::ObjectsInBoxes>(
       boundingBoxesTopicName, boundingBoxesQueueSize, boundingBoxesLatch);
+  //发布带边框的图像
   detectionImagePublisher_ = nodeHandle_.advertise<sensor_msgs::Image>(detectionImageTopicName,
                                                                        detectionImageQueueSize,
                                                                        detectionImageLatch);
@@ -185,6 +233,81 @@ void YoloObjectDetector::init()
   checkForObjectsActionServer_->start();
 }
 
+
+void YoloObjectDetector::compute_pose_callback(const object_msgs::ObjectsInBoxesConstPtr &objectInBoxes, 
+                                               const sensor_msgs::ImageConstPtr &depth,
+                                               const sensor_msgs::CameraInfoConstPtr &cameraInfo)
+{
+  darknet_ros_msgs::ObjectPose op;
+  darknet_ros_msgs::ObjectPose ops;
+  std::cout<<"---"<<objectInBoxes->objects_vector.size()<<std::endl;
+
+  cv::Mat depthMat1(depth->height, depth->width,  CV_32FC1, (void*)&depth->data[0]);
+  cv::Mat depthMat;
+
+  for(int i=0; i<objectInBoxes->objects_vector.size(); i++){
+    // std::cout<<objectInBoxes->objects_vector[i].object.object_name<<std::endl;
+    // std::cout<<objectInBoxes->objects_vector[i].object.probability<<std::endl;
+    op.Class = objectInBoxes->objects_vector[i].object.object_name;
+    op.probability = objectInBoxes->objects_vector[i].object.probability;
+    int x = objectInBoxes->objects_vector[i].roi.x_offset + objectInBoxes->objects_vector[i].roi.width/2;
+    int y = objectInBoxes->objects_vector[i].roi.y_offset + objectInBoxes->objects_vector[i].roi.height/2;
+
+    std::cout<<"x:"<<objectInBoxes->objects_vector[i].roi.x_offset<<"; y:"<<objectInBoxes->objects_vector[i].roi.y_offset<<"; w:"<<
+    objectInBoxes->objects_vector[i].roi.width<<"; h:"<<objectInBoxes->objects_vector[i].roi.height<<std::endl;
+
+
+    std::cout<<depthMat1.rows<<"  "<<depthMat1.cols<<std::endl;
+    
+    depthMat = depthMat1(cv::Rect(objectInBoxes->objects_vector[i].roi.x_offset,
+                                    objectInBoxes->objects_vector[i].roi.y_offset,
+                                    objectInBoxes->objects_vector[i].roi.width,
+                                    objectInBoxes->objects_vector[i].roi.height));
+    std::cout<< "-------------"<<depthMat.at<int>(x,y)<<std::endl;
+    sensor_msgs::LaserScanPtr scan_msg = dtl_.convert_msg(depth, cameraInfo);
+  }
+
+/*
+  depthMat.convertTo(depthMat, CV_8UC1, 1.0 / 16);
+  cv::Mat threshold_output;
+  cv::threshold(depthMat, threshold_output, 20, 255, CV_THRESH_BINARY);
+  //在Mat中找到障碍的轮廓
+  std::vector<std::vector<cv::Point> > contours;
+  std::vector<cv::Vec4i> hierarchy;
+  cv::findContours(threshold_output, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE, cv::Point(0, 0));
+  //找到障碍轮廓的凸形外廓
+  std::vector<std::vector<cv::Point> >hull(contours.size());
+  for (int i = 0; i < contours.size(); i++)
+  {
+      cv::convexHull(cv::Mat(contours[i]), hull[i], false);
+  }
+  //将面积小于100mm平方的凸形外廓当成噪点屏蔽
+  std::vector<std::vector<cv::Point> > result;
+  for (int i = 0; i< contours.size(); i++)
+  {
+      if (cv::contourArea(contours[i]) < 100)
+      {
+          continue;
+      }
+      result.push_back(hull[i]);
+  }
+  //绘制障碍轮廓
+  cv::RNG rng(12345);
+  cv::Mat drawing = cv::Mat::zeros(threshold_output.size(), CV_8UC3);
+  for (int i = 0; i< contours.size(); i++)
+  {
+      cv::Scalar color = cv::Scalar(rng.uniform(0, 255), rng.uniform(0, 255), rng.uniform(0, 255));
+      cv::drawContours(drawing, contours, i, color, 1, 8, std::vector<cv::Vec4i>(), 0, cv::Point());
+      cv::drawContours(drawing, hull, i, color, 1, 8, std::vector<cv::Vec4i>(), 0, cv::Point());
+  }
+  //显示
+  cv::imshow("contours", drawing);
+  cv::waitKey(30);
+*/
+
+}
+
+
 void YoloObjectDetector::cameraCallback(const sensor_msgs::ImageConstPtr& msg)
 {
   ROS_DEBUG("[YoloObjectDetector] USB image received.");
@@ -200,7 +323,7 @@ void YoloObjectDetector::cameraCallback(const sensor_msgs::ImageConstPtr& msg)
   }
 
   if (cam_image) {
-    {
+    {//在unique_lock对象的声明周期内，它所管理的锁对象会一直保持上锁状态；而unique_lock的生命周期结束之后，它所管理的锁对象会被解锁
       boost::unique_lock<boost::shared_mutex> lockImageCallback(mutexImageCallback_);
       camImageCopy_ = cam_image->image.clone();
     }
@@ -353,6 +476,7 @@ void *YoloObjectDetector::detectInThread()
     printf("Objects:\n\n");
   }
   image display = buff_[(buffIndex_+2) % 3];
+  //该函数内会在终端不断输出检测信息
   draw_detections(display, dets, nboxes, demoThresh_, demoNames_, demoAlphabet_, demoClasses_);
 
   // extract the bounding boxes and send them to ROS
@@ -617,7 +741,6 @@ void *YoloObjectDetector::publishInThread()
           boundingBox1.roi.height = ymax-ymin;
           boundingBox1.roi.width = xmax-xmin;
           boundingBoxesResults_1.objects_vector.push_back(boundingBox1);
-          boundingBoxesResults_1.header = imageHeader_;
 
 
           boundingBox.Class = classLabels_[i];
@@ -631,6 +754,7 @@ void *YoloObjectDetector::publishInThread()
       }
     }
     boundingBoxesResults_.header = imageHeader_;
+    boundingBoxesResults_1.header = imageHeader_;
     boundingBoxesPublisher_.publish(boundingBoxesResults_1);
   } else {
     std_msgs::Int8 msg;

@@ -1,8 +1,16 @@
 subscribers:
 
   camera_reading:
-    #topic: /water_astra_rgbd/rgb/image_raw
-    topic: /object_analytics/rgb
+    topic: /water_astra_rgbd/rgb/image_raw
+    #topic: /object_analytics/rgb
+    queue_size: 1
+
+  depth_reading:
+    topic: /water_astra_rgbd/depth_registered/image
+    queue_size: 1
+  
+  camera_info:
+    topic: /water_astra_rgbd/depth/camera_info
     queue_size: 1
 
 actions:
@@ -28,8 +36,17 @@ publishers:
     queue_size: 1
     latch: true
 
+  object_pose:
+    topic: /darknet_ros/object_pose
+    queue_size: 1
+    latch: false
+
+
+
+
+
 image_view:
 
   enable_opencv: false
   wait_key_delay: 1
-  enable_console_output: true
+  enable_console_output: false
