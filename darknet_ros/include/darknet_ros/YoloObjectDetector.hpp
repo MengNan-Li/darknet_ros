@@ -49,6 +49,7 @@
 #include <DepthImageToLaserScan.h>
 
 
+
 // Darknet.
 #ifdef GPU
 #include "cuda_runtime.h"
@@ -96,12 +97,19 @@ class YoloObjectDetector
 
  private:
   
-  message_filters::TimeSynchronizer<object_msgs::ObjectsInBoxes, sensor_msgs::Image, sensor_msgs::CameraInfo> *sync;
+  //message_filters::TimeSynchronizer<object_msgs::ObjectsInBoxes, sensor_msgs::Image> *sync;
+  typedef message_filters::sync_policies::ApproximateTime<object_msgs::ObjectsInBoxes, sensor_msgs::LaserScan> MySyncPolicy;
+  message_filters::Synchronizer<MySyncPolicy> *sync;
   message_filters::Subscriber<object_msgs::ObjectsInBoxes> *object_boxes_sub;
   message_filters::Subscriber<sensor_msgs::Image> *depth_sub;
-  message_filters::Subscriber<sensor_msgs::CameraInfo> *cameraInfo_sub;
+  message_filters::Subscriber<sensor_msgs::LaserScan> *depth_scan_sub;
+  // message_filters::Subscriber<sensor_msgs::CameraInfo> *cameraInfo_sub;
+  // image_transport::Subscriber cameraInfo_sub;
+  ros::Subscriber cameraInfo_sub;
 
   depthimage_to_laserscan::DepthImageToLaserScan dtl_;
+  ros::Publisher scanPublisher;
+
   /*!
    * Reads and verifies the ROS parameters.
    * @return true if successful.
@@ -113,10 +121,12 @@ class YoloObjectDetector
    */
   void init();
 
+  void object_scan_callback(const object_msgs::ObjectsInBoxesConstPtr &objectInBoxes, 
+                                               const sensor_msgs::LaserScanConstPtr &depth_scan);
 
   void compute_pose_callback(const object_msgs::ObjectsInBoxesConstPtr &objectInBoxes, 
-                             const sensor_msgs::ImageConstPtr &depth,
-                             const sensor_msgs::CameraInfoConstPtr &cameraInfo);
+                             const sensor_msgs::ImageConstPtr &depth);
+  void depth_camera_info_callback(const sensor_msgs::CameraInfoConstPtr &cameraInfo);
 
   /*!
    * Callback of camera.
@@ -168,6 +178,7 @@ class YoloObjectDetector
   image_transport::Subscriber imageSubscriber_;
   ros::Publisher objectPublisher_;
   ros::Publisher boundingBoxesPublisher_;
+  ros::Publisher objectPosePublisher_;
 
   //! Detected objects.
   std::vector<std::vector<RosBox_> > rosBoxes_;

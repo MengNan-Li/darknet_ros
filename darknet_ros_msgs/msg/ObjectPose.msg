@@ -1,6 +1,6 @@
 string Class
 float64 probability
-int64 x
-int64 y
-int64 z
+float64 x
+float64 y
+float64 distance
 

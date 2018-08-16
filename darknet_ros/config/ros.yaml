@@ -3,14 +3,19 @@ subscribers:
   camera_reading:
     topic: /water_astra_rgbd/rgb/image_raw
     #topic: /object_analytics/rgb
+    #topic: /water_astra_rgbd/rgb
     queue_size: 1
 
   depth_reading:
-    topic: /water_astra_rgbd/depth_registered/image
+    topic: /water_astra_rgbd/depth_registered/image_raw
     queue_size: 1
   
   camera_info:
     topic: /water_astra_rgbd/depth/camera_info
+    queue_size: 1
+
+  depth_scan:
+    topic: /water_depthimage_scan/scan
     queue_size: 1
 
 actions:
@@ -27,7 +32,8 @@ publishers:
 
   bounding_boxes:
     #topic: /darknet_ros/bounding_boxes
-    topic: /object_analytics/detection
+    #topic: /object_analytics/detection
+    topic: /water_astra_rgbd/detection
     queue_size: 1
     latch: false
 
@@ -47,6 +53,6 @@ publishers:
 
 image_view:
 
-  enable_opencv: false
+  enable_opencv: true
   wait_key_delay: 1
   enable_console_output: false

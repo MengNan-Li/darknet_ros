@@ -142,6 +142,8 @@ void YoloObjectDetector::init()
   int cameraQueueSize;
   std::string depthTopicName;
   int depthQueueSize;
+  std::string depthScanTopicName;
+  int depthScanQueueSize;
   std::string cameraInfoTopicName;
   int cameraInfoQueueSize;
   std::string objectDetectorTopicName;
@@ -167,6 +169,11 @@ void YoloObjectDetector::init()
   std::cout<<"subscribers/depth_reading/topic: "<< depthTopicName << std::endl;
   nodeHandle_.param("subscribers/depth_reading/queue_size", depthQueueSize, 1);
 
+  nodeHandle_.param("subscribers/depth_scan/topic", depthScanTopicName,
+                    std::string("subscribers/depth_scan/topic"));
+  std::cout<<"subscribers/depth_scan/topic: "<< depthScanTopicName << std::endl;
+  nodeHandle_.param("subscribers/depth_scan/queue_size", depthScanQueueSize, 1);
+
   nodeHandle_.param("subscribers/camera_info/topic", cameraInfoTopicName,
                     std::string("/camera/image_raw"));
   std::cout<<"subscribers/camera_info/topic: "<< cameraInfoTopicName << std::endl;
@@ -190,23 +197,40 @@ void YoloObjectDetector::init()
   nodeHandle_.param("publishers/object_pose/latch", objectPoseLatch, true);
 
 
+
   //订阅图像
   imageSubscriber_ = imageTransport_.subscribe(cameraTopicName, cameraQueueSize,
                                                &YoloObjectDetector::cameraCallback, this);
-  
+
   //时间同步订阅边框和深度 --> 计算pose
   object_boxes_sub = new  message_filters::Subscriber<object_msgs::ObjectsInBoxes>(nodeHandle_, boundingBoxesTopicName, boundingBoxesQueueSize);
-  depth_sub = new message_filters::Subscriber<sensor_msgs::Image>(nodeHandle_, cameraTopicName, cameraQueueSize); 
-  cameraInfo_sub = new message_filters::Subscriber<sensor_msgs::CameraInfo>(nodeHandle_, cameraInfoTopicName, cameraInfoQueueSize);
+  depth_sub = new message_filters::Subscriber<sensor_msgs::Image>(nodeHandle_, depthTopicName, depthQueueSize); 
+  depth_scan_sub = new message_filters::Subscriber<sensor_msgs::LaserScan>(nodeHandle_, depthScanTopicName, depthScanQueueSize);
+  /*可以跑通，但是计算有问题  
+  cameraInfo_sub = nodeHandle_.subscribe(cameraInfoTopicName,cameraInfoQueueSize, &YoloObjectDetector::depth_camera_info_callback, this);
+  sync = new message_filters::Synchronizer<MySyncPolicy>(MySyncPolicy(200), *object_boxes_sub, *depth_sub);// 同步
+  sync->registerCallback(boost::bind(&YoloObjectDetector::compute_pose_callback, this, _1, _2));  
+*/
+
   /*订阅对象和sync必须是具备全局生命周期的，所以下面的局部变量就不合适了*/
   // typedef message_filters::sync_policies::ApproximateTime<object_msgs::ObjectsInBoxes,
   //       sensor_msgs::Image> MySyncPolicy;
   // message_filters::Synchronizer<MySyncPolicy> sync(MySyncPolicy(200), object_boxes_sub, depth_sub);// 同步
   // sync.registerCallback(boost::bind(&YoloObjectDetector::compute_pose_callback, this, _1, _2));   
+  /*这种时间同步方式需要在队列中找时间一致的，比较严格*/
+  // sync = new message_filters::TimeSynchronizer<object_msgs::ObjectsInBoxes, sensor_msgs::Image>
+  //                                            (*object_boxes_sub, *depth_sub, 200);
+  // sync->registerCallback(boost::bind(&YoloObjectDetector::compute_pose_callback, this, _1, _2));
 
-  sync = new message_filters::TimeSynchronizer<object_msgs::ObjectsInBoxes, sensor_msgs::Image, sensor_msgs::CameraInfo>
-                                             (*object_boxes_sub, *depth_sub, *cameraInfo_sub, 10);
-  sync->registerCallback(boost::bind(&YoloObjectDetector::compute_pose_callback, this, _1, _2, _3));
+
+
+/**bounding+depth scan得到scan的中心距离*/
+  sync = new message_filters::Synchronizer<MySyncPolicy>(MySyncPolicy(200), *object_boxes_sub, *depth_scan_sub);// 同步
+  sync->registerCallback(boost::bind(&YoloObjectDetector::object_scan_callback, this, _1, _2));  
+  scanPublisher = nodeHandle_.advertise<sensor_msgs::LaserScan>("object_box_scan",10);
+  dtl_.output_frame_id_ = "laser";
+  dtl_.range_min_ = 0.1;
+  dtl_.range_max_ = 8;
 
   //发布object的标号，和训练中的label标号顺序一样
   objectPublisher_ = nodeHandle_.advertise<std_msgs::Int8>(objectDetectorTopicName,
@@ -219,6 +243,9 @@ void YoloObjectDetector::init()
   detectionImagePublisher_ = nodeHandle_.advertise<sensor_msgs::Image>(detectionImageTopicName,
                                                                        detectionImageQueueSize,
                                                                        detectionImageLatch);
+  objectPosePublisher_ = nodeHandle_.advertise<darknet_ros_msgs::ObjectPoses>(objectPoseTopicName,
+                                                                       objectPoseQueueSize,
+                                                                       objectPoseLatch);                                                                   
 
   // Action servers.
   std::string checkForObjectsActionName;
@@ -233,10 +260,68 @@ void YoloObjectDetector::init()
   checkForObjectsActionServer_->start();
 }
 
+void YoloObjectDetector::depth_camera_info_callback(const sensor_msgs::CameraInfoConstPtr &cameraInfo){
+  dtl_.cam_model_.fromCameraInfo(cameraInfo);
+  cameraInfo_sub.shutdown();
+}
+
+void YoloObjectDetector::object_scan_callback(const object_msgs::ObjectsInBoxesConstPtr &objectInBoxes, 
+                                               const sensor_msgs::LaserScanConstPtr &depth_scan)
+{
+  darknet_ros_msgs::ObjectPose op;
+  darknet_ros_msgs::ObjectPoses ops;
+  for(int i=0; i<objectInBoxes->objects_vector.size(); i++){
+    int x_offset = objectInBoxes->objects_vector[i].roi.x_offset;
+    // std::cout<<"x_offset:"<<x_offset<<std::endl;
+    int width = objectInBoxes->objects_vector[i].roi.width;
+    // std::cout<<"central point:"<<depth_scan->ranges[x_offset+width/10]<<std::endl;
+    op.Class = objectInBoxes->objects_vector[i].object.object_name;
+    op.probability = objectInBoxes->objects_vector[i].object.probability;
+    
+    //x=distance*sin(β))
+    float y = depth_scan->ranges[x_offset+width/10] * sin(depth_scan->angle_min + (x_offset+width/10) * depth_scan->angle_increment);
+    float x = depth_scan->ranges[x_offset+width/10] * cos(depth_scan->angle_min + (x_offset+width/10) * depth_scan->angle_increment);
+    op.x = x;
+    op.y = y;
+    op.distance = depth_scan->ranges[x_offset+width/10];
+    ops.object_poses.push_back(op);
+  }
+  objectPosePublisher_.publish(ops);
+
+  /* 发布object scan方式，会有断隔
+  sensor_msgs::LaserScanPtr depth_box_scan(new sensor_msgs::LaserScan());
+  depth_box_scan->header = depth_scan->header;
+  depth_box_scan->angle_min = depth_scan->angle_min;
+  depth_box_scan->angle_max = depth_scan->angle_max;
+  depth_box_scan->angle_increment = depth_scan->angle_increment;
+  depth_box_scan->time_increment = depth_scan->time_increment;
+  depth_box_scan->scan_time = depth_scan->scan_time;
+  depth_box_scan->range_min = depth_scan->range_min;
+  depth_box_scan->range_max = depth_scan->range_max;
+
+  for(int i=0; i<objectInBoxes->objects_vector.size(); i++){
+    int x_offset = objectInBoxes->objects_vector[i].roi.x_offset;
+    int width = objectInBoxes->objects_vector[i].roi.width;
+    // std::cout<<width<<std::endl;
+    try
+    {
+      depth_box_scan->ranges.assign(depth_scan->ranges.size(), std::numeric_limits<float>::quiet_NaN());
+      for(int j=x_offset; j<x_offset + width; j++){
+         depth_box_scan->ranges[j] = depth_scan->ranges[j]; //这样会有断隔，因为边框附近并不是物体本身
+      }
+    }
+    catch (std::runtime_error &e)
+    {
+        ROS_ERROR("[ depth_box_scan->ranges] exception: %s", e.what());
+    }
+    scanPublisher.publish(depth_box_scan);
+  }
+  */
+
+}
 
 void YoloObjectDetector::compute_pose_callback(const object_msgs::ObjectsInBoxesConstPtr &objectInBoxes, 
-                                               const sensor_msgs::ImageConstPtr &depth,
-                                               const sensor_msgs::CameraInfoConstPtr &cameraInfo)
+                                               const sensor_msgs::ImageConstPtr &depth)
 {
   darknet_ros_msgs::ObjectPose op;
   darknet_ros_msgs::ObjectPose ops;
@@ -253,8 +338,8 @@ void YoloObjectDetector::compute_pose_callback(const object_msgs::ObjectsInBoxes
     int x = objectInBoxes->objects_vector[i].roi.x_offset + objectInBoxes->objects_vector[i].roi.width/2;
     int y = objectInBoxes->objects_vector[i].roi.y_offset + objectInBoxes->objects_vector[i].roi.height/2;
 
-    std::cout<<"x:"<<objectInBoxes->objects_vector[i].roi.x_offset<<"; y:"<<objectInBoxes->objects_vector[i].roi.y_offset<<"; w:"<<
-    objectInBoxes->objects_vector[i].roi.width<<"; h:"<<objectInBoxes->objects_vector[i].roi.height<<std::endl;
+    std::cout<<"x_offset:"<<objectInBoxes->objects_vector[i].roi.x_offset<<"; y_offset:"<<objectInBoxes->objects_vector[i].roi.y_offset<<"; w:"<<
+    objectInBoxes->objects_vector[i].roi.width<<"; h:"<<objectInBoxes->objects_vector[i].roi.height<<"; x:"<<x<<"; y:"<<y<<std::endl;
 
 
     std::cout<<depthMat1.rows<<"  "<<depthMat1.cols<<std::endl;
@@ -264,7 +349,36 @@ void YoloObjectDetector::compute_pose_callback(const object_msgs::ObjectsInBoxes
                                     objectInBoxes->objects_vector[i].roi.width,
                                     objectInBoxes->objects_vector[i].roi.height));
     std::cout<< "-------------"<<depthMat.at<int>(x,y)<<std::endl;
-    sensor_msgs::LaserScanPtr scan_msg = dtl_.convert_msg(depth, cameraInfo);
+    std::cout<< "-------------"<<depth->encoding<<std::endl;
+    double real_depth = 0;
+    
+   
+    sensor_msgs::LaserScanPtr depth_box_scan(new sensor_msgs::LaserScan());
+
+    int w = objectInBoxes->objects_vector[i].roi.width;
+    int h = objectInBoxes->objects_vector[i].roi.height;
+    int x_offset = objectInBoxes->objects_vector[i].roi.x_offset;
+    int y_offset = objectInBoxes->objects_vector[i].roi.y_offset;
+
+    if (depth->encoding == sensor_msgs::image_encodings::TYPE_16UC1)
+    {
+      dtl_.convert_point<uint16_t>(depth, dtl_.cam_model_, real_depth, x, y);
+      //dtl_.convert_box<uint16_t>(depth, dtl_.cam_model_, depth_box_scan, x_offset, y_offset,w,h);
+    }
+    else if (depth->encoding == sensor_msgs::image_encodings::TYPE_32FC1)
+    {
+      dtl_.convert_point<float>(depth, dtl_.cam_model_, real_depth, x, y);
+      //dtl_.convert_box<float>(depth, dtl_.cam_model_, depth_box_scan, x_offset, y_offset,w,h);
+    }
+    else
+    {
+      std::stringstream ss;
+      ss << "Depth image has unsupported encoding: " << depth->encoding;
+      throw std::runtime_error(ss.str());
+    }
+    std::cout<<"real_depth:"<<real_depth<<std::endl;
+    // sensor_msgs::LaserScanPtr scan_msg = dtl_.convert_msg(depth, cameraInfo);
+    scanPublisher.publish(depth_box_scan);
   }
 
 /*
@@ -753,6 +867,7 @@ void *YoloObjectDetector::publishInThread()
         }
       }
     }
+    //imageHeader_.stamp = ros::Time();
     boundingBoxesResults_.header = imageHeader_;
     boundingBoxesResults_1.header = imageHeader_;
     boundingBoxesPublisher_.publish(boundingBoxesResults_1);
